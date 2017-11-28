@@ -2480,14 +2480,12 @@ class SLinux(Linux):
         :param flags: file access bits
         :param mode: file permission mode
         '''
-
-        # Relative path set based on the "dirfd" input
-        if not buf.startswith(os.getcwd()):
-            if dirfd != "AT_FDCWD":
-                buf = os.path.relpath(buf, dirfd)
-
         symbolic_path = issymbolic(self.current.read_int(buf, 8))
         if symbolic_path:
+            # Relative path set based on the "dirfd" input
+            if not symbolic_path.startswith(os.getcwd()):
+                if dirfd != "AT_FDCWD":
+                    symbolic_path = os.path.relpath(symbolic_path, dirfd)
             import tempfile
             fd, path = tempfile.mkstemp()
             with open(path, 'wb+') as f:
