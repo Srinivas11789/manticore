@@ -2482,8 +2482,8 @@ class SLinux(Linux):
         :param mode: file permission mode
         '''
         symbolic_path = issymbolic(self.current.read_int(buf, 8))
-        logger.debug("Symbolic Path is %s",str(symbolic_path))
-        logger.debug(str(dirfd))
+        logger.info("Symbolic Path is %s",str(symbolic_path))
+        logger.info(str(dirfd))
         if symbolic_path:
             # Relative path set based on the "dirfd" input
             if not symbolic_path.startswith(os.getcwd()):
