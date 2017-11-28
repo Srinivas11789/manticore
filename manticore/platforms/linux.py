@@ -2471,7 +2471,8 @@ class SLinux(Linux):
         When given a symbolic path, it will create a temporary file with
         64 bytes of symbolic bytes as contents and return that instead.
 
-        Reference: Look at manpage http://man7.org/linux/man-pages/man2/open.2.html
+        Reference: Look at manpage http://man7.org/linux/man-pages/man2/open.2.html or /
+        https://linux.die.net/man/2/openat
         - Open vs Openat: Difference being argument dirfd providing reference for /
         relative path construction
 
@@ -2481,10 +2482,12 @@ class SLinux(Linux):
         :param mode: file permission mode
         '''
         symbolic_path = issymbolic(self.current.read_int(buf, 8))
+        logger.debug("Symbolic Path is %s",str(symbolic_path))
+        logger.debug(str(dirfd))
         if symbolic_path:
             # Relative path set based on the "dirfd" input
             if not symbolic_path.startswith(os.getcwd()):
-                if dirfd != "AT_FDCWD":
+                if str(dirfd) != "AT_FDCWD":
                     symbolic_path = os.path.relpath(symbolic_path, dirfd)
             import tempfile
             fd, path = tempfile.mkstemp()
