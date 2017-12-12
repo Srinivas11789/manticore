@@ -2434,6 +2434,17 @@ class SLinux(Linux):
 
         return rv
 
+    def sys_openat(self, dirfd, buf, flags, mode):
+        if issymbolic(dirfd):
+            logger.debug("Ask to open from a symbolic directory file descriptor!!")
+            raise ConcretizeArgument(self, 0)
+
+        if issymbolic(buf):
+            logger.debug("Ask to open to a symbolic buffer")
+            raise ConcretizeArgument(self, 1)
+
+        return super(SLinux, self).sys_openat(dirfd, buf, flags, mode)
+
     def sys_getrandom(self, buf, size, flags):
         data = ''
         if issymbolic(buf):
