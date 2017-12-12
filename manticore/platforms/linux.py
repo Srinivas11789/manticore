@@ -1082,9 +1082,7 @@ class Linux(Platform):
                             "of the path + 1. Returning ERANGE")
                 return -errno.ERANGE
         
-            if not self.current.memory.access_ok(slice(buf, buf+length), 'w'):
-                logger.info("GETCWD: buf within invalid memory. Returning EFAULT")
-                return -errno.EFAULT
+
                       
             self.current.write_string(buf, current_dir)
             logger.debug("getcwd(0x%08x, %u) -> <%s> (Size %d)", buf, size, current_dir, length)
@@ -2514,6 +2512,47 @@ class SLinux(Linux):
             self.current.write_bytes(buf, str(data))
 
         return len(str(data))
+
+    def sys_gethostname(self, buf, size):
+        '''
+        The gethostname system call returns the hostname of the current processor in the buffer of size bytes
+
+        :param buf: buffer to be filled with hostname
+        :param size: size of the random bytes to be filled
+        :return: 0 if success or -1 if Failure
+        '''
+
+        if issymbolic(buf):
+            logger.debug("Ask to write to a symbolic buffer")
+            raise ConcretizeArgument(self, 0)
+
+        try:
+
+            if size <= 0:
+                logger.info("GETHOSTNAME: Invalid size provided as argument")
+                return -errno.EINVAL
+
+            try:
+               hostname = socket.gethostname()
+            except OSError as e:
+                logger.info("GETHOSTNAME: Get host name failed")
+                return -e.errno
+
+            if not self.current.memory.access_ok(slice(buf, buf+len(hostname)), 'w'):
+                logger.info("GETHOSTNAME: buf within invalid memory. Returning EFAULT")
+                return -errno.EFAULT
+
+            self.current.write_bytes(buf,hostname)
+
+            if size < len(hostname):
+                logger.info("GETHOSTNAME: size is smaller than the acutal size")
+                return -errno.ENAMETOOLONG
+
+            logger.debug("gethostname -> <%s>", buf)
+            return 0
+
+        except OSError as e:
+            return -e.errno
 
     def generate_workspace_files(self):
         def solve_to_fd(data, fd):
