@@ -15,6 +15,7 @@ from multiprocessing.managers import SyncManager
 
 from .smtlib import solver
 from .smtlib.solver import SolverException
+from .state import State
 
 logger = logging.getLogger(__name__)
 
@@ -389,9 +390,18 @@ class Workspace(object):
         :return: New state id
         :rtype: int
         """
+        assert isinstance(state, State)
         id_ = self._get_id()
         self._store.save_state(state, '{}{:08x}{}'.format(self._prefix, id_, self._suffix))
         return id_
+
+    def rm_state(self, state_id):
+        """
+        Remove a state from storage identified by `state_id`.
+
+        :param state_id: The state reference of what to load
+        """
+        return self._store.rm('{}{:08x}{}'.format(self._prefix, state_id, self._suffix))
 
 
 class ManticoreOutput(object):
@@ -414,6 +424,23 @@ class ManticoreOutput(object):
         self._last_id = 0
         self._id_gen = manager.Value('i', self._last_id)
         self._lock = manager.Condition(manager.RLock())
+
+    def testcase(self, prefix='test'):
+        class Testcase(object):
+            def __init__(self, workspace, prefix):
+                self._num = workspace._increment_id()
+                self._prefix = prefix
+                self._ws = workspace
+
+            @property
+            def num(self):
+                return self._num
+
+            def open_stream(self, suffix=''):
+                stream_name = '{}_{:08x}.{}'.format(self._prefix, self._num, suffix)
+                return self._ws.save_stream(stream_name)
+ 
+        return Testcase(self, prefix)
 
     @property
     def store(self):
@@ -438,6 +465,7 @@ class ManticoreOutput(object):
     def _increment_id(self):
         self._last_id = self._id_gen.value
         self._id_gen.value += 1
+        return self._last_id
 
     def _named_key(self, suffix):
         return '{}_{:08x}.{}'.format(self._named_key_prefix, self._last_id, suffix)

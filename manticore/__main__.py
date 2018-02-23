@@ -1,14 +1,25 @@
 import sys
+import logging
 import argparse
 
-from manticore import Manticore
+from . import Manticore
+from .utils import log
+
+# XXX(yan): This would normally be __name__, but then logger output will be pre-
+# pended by 'm.__main__: ', which is not very pleasing. hard-coding to 'main'
+logger = logging.getLogger('manticore.main')
 
 sys.setrecursionlimit(10000)
 
+
 def parse_arguments():
-    ###########################################################################
-    # parse arguments
-    parser = argparse.ArgumentParser(description='Dynamic binary analysis tool')
+    def positive(value):
+        ivalue = int(value)
+        if ivalue <= 0:
+            raise argparse.ArgumentTypeError("Argument must be positive")
+        return ivalue
+
+    parser = argparse.ArgumentParser(description='Symbolic execution tool')
     parser.add_argument('--assertions', type=str, default=None,
                         help=argparse.SUPPRESS)
     parser.add_argument('--buffer', type=str,
@@ -49,8 +60,12 @@ def parse_arguments():
     parser.add_argument('--workspace', type=str, default=None,
                         help=("A folder name for temporaries and results."
                               "(default mcore_?????)"))
-    parser.add_argument('--version', action='version', version='Manticore 0.1.5',
+    parser.add_argument('--version', action='version', version='Manticore 0.1.6',
                          help='Show program version information')
+    parser.add_argument('--txlimit', type=positive,
+                        help='Maximum number of symbolic transactions to run (positive integer) (Ethereum only)')
+    parser.add_argument('--contract', type=str,
+                        help='Contract name to analyze in case of multiple ones (Ethereum only)')
 
     parsed = parser.parse_args(sys.argv[1:])
     if parsed.procs <= 0:
@@ -65,116 +80,22 @@ def parse_arguments():
 
 
 def ethereum_cli(args):
-    from seth import ManticoreEVM, IntegerOverflow, UnitializedStorage, UnitializedMemory
+    from ethereum import ManticoreEVM, IntegerOverflow, UninitializedStorage, UninitializedMemory
+    log.init_logging()
 
     m = ManticoreEVM(procs=args.procs)
 
     ################ Default? Detectors #######################
     m.register_detector(IntegerOverflow())
-    m.register_detector(UnitializedStorage())
-    m.register_detector(UnitializedMemory())
+    m.register_detector(UninitializedStorage())
+    m.register_detector(UninitializedMemory())
 
+    logger.info("Beginning analysis")
 
-    with open(args.argv[0]) as f:
-        source_code = f.read()
-
-    user_account = m.create_account(balance=1000)
-    contract_account = m.solidity_create_contract(source_code, owner=user_account)
-    attacker_account = m.create_account(balance=1000)
-
-    last_coverage = None
-    new_coverage = 0
-    tx_count = 0
-    while new_coverage != last_coverage and new_coverage < 100:
-
-        symbolic_data = m.make_symbolic_buffer(320)
-        symbolic_value = m.make_symbolic_value()
-
-        m.transaction(caller=attacker_account,
-                         address=contract_account,
-                         data=symbolic_data,
-                         value=symbolic_value )
-
-        tx_count += 1
-        last_coverage = new_coverage
-        new_coverage = m.global_coverage(contract_account)
-
-        print "[+] Coverage after %d transactions: %d%%"%(tx_count, new_coverage)
-        print "[+] There are %d reverted states now"% len(m.terminated_state_ids)
-        print "[+] There are %d alive states now"% len(m.running_state_ids)
-
-    for state in m.all_states:
-        print str(state.context['last_exception'])
-
-    for address, pc, finding in m.global_findings:
-        output = ''
-        output += 'Finding: %s\n' % finding
-        output += '\t Contract: %s\n' % address
-        output += '\t Program counter: %s\n' % pc
-        output += '\t Snippet:\n'
-        src = m.get_metadata(address).get_source_for(pc)
-        output += '\n'.join(('\t\t'+x for x in src.split('\n')))
-        output += '\n'
-        print output
-            
-
-    # for state in seth.all_states:
-    #     blockchain = state.platform
-    #     for tx in blockchain.transactions:  # external transactions
-    #         print "Transaction:"
-    #         print "\tsort %s" % tx.sort  # Last instruction or type? TBD
-    #         print "\tcaller 0x%x" % state.solve_one(
-    #             tx.caller)  # The caller as by the yellow paper
-    #         print "\taddress 0x%x" % state.solve_one(
-    #             tx.address)  # The address as by the yellow paper
-    #         print "\tvalue: %d" % state.solve_one(
-    #             tx.value)  # The value as by the yellow paper
-    #         print "\tcalldata: %r" % state.solve_one(tx.data)
-    #         print "\tresult: %s" % tx.result  # The result if any RETURN or REVERT
-    #         print "\treturn_data: %r" % state.solve_one(
-    #             tx.return_data)  # The returned data if RETURN or REVERT
-    #
-    #         if tx.sort == 'Call':
-    #             metadata = seth.get_metadata(tx.address)
-    #             if metadata is not None:
-    #                 function_id = tx.data[:4]  # hope there is enough data
-    #                 function_id = state.solve_one(function_id).encode('hex')
-    #                 signature = metadata.get_func_signature(function_id)
-    #                 print "\tparsed calldata", ABI.parse(signature,
-    #                                                      tx.data)  # func_id, *function arguments
-    #                 if tx.result == 'RETURN':
-    #                     ret_types = metadata.get_func_return_types(function_id)
-    #                     print '\tparsed return_data', ABI.parse(ret_types,
-    #                                                             tx.return_data)  # function return
-    #
-    #     # the logs
-    #     for log_item in blockchain.logs:
-    #         print "log address", log_item.address
-    #         print "memlog", log_item.memlog
-    #         for topic in log_item.topics:
-    #             print "topic", topic
-    #
-    #     for address in blockchain.deleted_addresses:
-    #         print "deleted address", address  # selfdestructed address
-    #
-    #     # accounts alive in this state
-    #     for address in blockchain.contract_accounts:
-    #         code = blockchain.get_code(address)
-    #         balance = blockchain.get_balance(address)
-    #         trace = set((offset for address_i, offset in state.context['seth.trace'] if
-    #                      address == address_i))
-    #         print calculate_coverage(code, trace)  # coverage % for address in this state
-    #
-    #         # All accounts ever created by the script
-    #         # (may not all be alife in all states)
-    #         # (accounts created by contract code are not in this list )
-    # print "[+] Global coverage:"
-    # for address in seth.contract_accounts:
-    #     print address, seth.global_coverage(
-    #         address)  # coverage % for address in this state
-
+    m.multi_tx_analysis(args.argv[0], args.contract, args.txlimit)
 
 def main():
+    log.init_logging()
     args = parse_arguments()
 
     Manticore.verbosity(args.v)

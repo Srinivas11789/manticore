@@ -212,13 +212,26 @@ class Manticore(Eventful):
             if callback is not None:
                 self.subscribe(event_name, callback)
 
-        if logger.isEnabledFor(logging.DEBUG):
-            for callback_name in dir(plugin):
-                if callback_name.endswith('_callback'):
-                    event_name = callback_name[:-9]
-                    if event_name not in all_events:
-                        logger.warning("There is no event name %s for callback on plugin type %s", event_name, type(plugin) )
+        #Safety checks
+        for callback_name in dir(plugin):
+            if callback_name.endswith('_callback'):
+                event_name = callback_name[:-9]
+                if event_name not in all_events:
+                    logger.warning("There is no event named %s for callback on plugin %s", event_name, type(plugin).__name__ )
 
+        for event_name in all_events:
+            for plugin_method_name in dir(plugin):
+                if event_name in plugin_method_name:
+                    if not plugin_method_name.endswith('_callback') :
+                        if plugin_method_name.startswith('on_') or \
+                           plugin_method_name.startswith('will_') or \
+                           plugin_method_name.startswith('did_'):
+                            logger.warning("Plugin methods named '%s()' should end with '_callback' on plugin %s", plugin_method_name, type(plugin).__name__ )
+                    if plugin_method_name.endswith('_callback') and \
+                        not plugin_method_name.startswith('on_') and \
+                        not plugin_method_name.startswith('will_') and \
+                        not plugin_method_name.startswith('did_'):
+                            logger.warning("Plugin methods named '%s()' should start with 'on_', 'will_' or 'did_' on plugin %s", plugin_method_name, type(plugin).__name__)
 
 
     def unregister_plugin(self, plugin):
@@ -354,44 +367,6 @@ class Manticore(Eventful):
     def running(self):
         return self._executor._running.value
 
-    def enqueue(self, state):
-        ''' Dynamically enqueue states. Users should typically not need to do this '''
-        self._executor.add(state)
-
-    ###########################################################################
-    # Workers                                                                 #
-    ###########################################################################
-    def _start_workers(self, num_processes, profiling=False):
-        assert num_processes > 0, "Must have more than 0 worker processes"
-
-        logger.info("Starting %d processes.", num_processes)
-
-        if profiling:
-            def profile_this(func):
-                @functools.wraps(func)
-                def wrapper(*args, **kwargs):
-                    profile = cProfile.Profile()
-                    profile.enable()
-                    result = func(*args, **kwargs)
-                    profile.disable()
-                    profile.create_stats()
-                    with self.locked_context('profiling_stats', list) as profiling_stats:
-                        profiling_stats.append(profile.stats.items())
-                    return result
-                return wrapper
-
-            target = profile_this(self._executor.run)
-        else:
-            target = self._executor.run
-
-        if num_processes == 1:
-            target()
-        else:
-            for _ in range(num_processes):
-                p = Process(target=target, args=())
-                self._workers.append(p)
-                p.start()
-
     @property
     def running(self):
         return self._executor.running
@@ -407,7 +382,7 @@ class Manticore(Eventful):
     def _start_workers(self, num_processes, profiling=False):
         assert num_processes > 0, "Must have more than 0 worker processes"
 
-        logger.info("Starting %d processes.", num_processes)
+        logger.debug("Starting %d processes.", num_processes)
 
         if profiling:
             def profile_this(func):
@@ -699,6 +674,10 @@ class Manticore(Eventful):
     @property
     def coverage_file(self):
         return self._coverage_file
+
+    @property
+    def workspace(self):
+         return self._output.store.uri
 
     @coverage_file.setter
     def coverage_file(self, path):

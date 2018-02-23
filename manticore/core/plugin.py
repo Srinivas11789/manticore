@@ -3,10 +3,35 @@ import logging
 from capstone import CS_GRP_JUMP
 
 from ..utils.helpers import issymbolic
-logger = logging.getLogger('MANTICORE')
+from contextlib import contextmanager
+
+logger = logging.getLogger(__name__)
 
 
 class Plugin(object):
+    @contextmanager
+    def locked_context(self, key=None, value_type=list):
+        """
+        A context manager that provides safe parallel access to the global Manticore context.
+        This should be used to access the global Manticore context
+        when parallel analysis is activated. Code within the `with` block is executed
+        atomically, so access of shared variables should occur within.
+        """
+        plugin_context_name = str(type(self))
+        with self.manticore.locked_context(plugin_context_name, dict) as context:
+            assert value_type in (list, dict, set)
+            ctx = context.get(key, value_type())
+            yield ctx
+            context[key] = ctx
+
+    @property
+    def context(self):
+        ''' Convenient access to shared context '''
+        plugin_context_name = str(type(self))
+        if plugin_context_name not in self.manticore.context:
+            self.manticore.context[plugin_context_name] = {}
+        return self.manticore.context[plugin_context_name]
+
     def __init__(self): 
         self.manticore = None
         self.last_reg_state = {}
@@ -98,6 +123,47 @@ class ExtendedTracer(Plugin):
         }
         state.context[self.context_key].append(entry)
 
+class Follower(Plugin):
+    def __init__(self, trace):
+        self.index = 0
+        self.trace = trace
+        self.last_instruction = None
+        self.symbolic_ranges = []
+        self.active = True
+        super(self.__class__, self).__init__()
+
+    def add_symbolic_range(self, pc_start, pc_end):
+        self.symbolic_ranges.append((pc_start,pc_end))
+
+    def get_next(self, type):
+        event = self.trace[self.index]
+        assert event['type'] == type
+        self.index += 1
+        return event
+
+    def did_write_memory_callback(self, state, where, value, size):
+        if not self.active:
+            return
+        write = self.get_next('mem_write')
+
+        if not issymbolic(value):
+            return
+
+        assert write['where'] == where and write['size'] == size
+        # state.constrain(value == write['value'])
+
+    def did_execute_instruction_callback(self, state, last_pc, pc, insn):
+        if not self.active:
+            return
+        event = self.get_next('regs')
+        self.last_instruction = event['values']
+        if issymbolic(pc):
+            state.constrain(state.cpu.RIP == self.last_instruction['RIP'])
+        else:
+            for start, stop in self.symbolic_ranges:
+                if start <= pc <= stop:
+                    self.active = False
+
 class RecordSymbolicBranches(Plugin):
     def will_start_run_callback(self, state):
         state.context['branches'] = {}
@@ -173,6 +239,34 @@ class Visited(Plugin):
                     f.write(fmt.format(m))
         logger.info('Coverage: %d different instructions executed', len(executor_visited))
 
+class ConcreteTraceFollower(Plugin):
+    def __init__(self, source=None):
+        '''
+        :param iterable source: Iterator producing instruction pointers to be followed
+        '''
+        super(ConcreteTraceFollower, self).__init__()
+        self.source = source
+
+    def will_start_run_callback(self, state):
+        self.saved_flags = None
+
+    def will_execute_instruction_callback(self, state, pc, instruction):
+        if not instruction.group(CS_GRP_JUMP):
+            self.saved_flags = None
+            return
+
+        # Likely unconditional
+        if not instruction.regs_read:
+            self.saved_flags = None
+            return
+
+        self.saved_flags = state.cpu.RFLAGS
+        state.cpu.RFLAGS = state.new_symbolic_value(state.cpu.address_bit_size)
+
+    def did_execute_instruction_callback(self, state, pc, target_pc, instruction):
+        # Should direct execution via trace
+        if self.saved_flags:
+            state.cpu.RFLAGS = self.saved_flags
 
 #TODO document all callbacks
 class ExamplePlugin(Plugin):

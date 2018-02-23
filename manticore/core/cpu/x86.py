@@ -8,7 +8,7 @@ import capstone as cs
 from .abstractcpu import (
     Abi, SyscallAbi, Cpu, RegisterFile, Operand, instruction,
     ConcretizeRegister, ConcretizeRegister, ConcretizeArgument, Interruption,
-    Syscall
+    Syscall, DivideByZeroError
 )
 
 
@@ -450,10 +450,13 @@ class AMD64RegFile(RegisterFile):
         for name in ('AF', 'CF', 'DF', 'IF', 'OF', 'PF', 'SF', 'ZF'):
             self.write(name, False)
 
+        self._all_registers = tuple(self._table) + \
+            ('FP0', 'FP1', 'FP2', 'FP3', 'FP4', 'FP5', 'FP6', 'FP7', 'EFLAGS', 'RFLAGS') + \
+            tuple(self._aliases)
+
     @property
     def all_registers(self):
-        return tuple( self._table.keys() +
-                      ['FP0', 'FP1', 'FP2', 'FP3', 'FP4', 'FP5', 'FP6', 'FP7'] + ['EFLAGS', 'RFLAGS'] + self._aliases.keys() )
+        return self._all_registers
 
     @property
     def canonical_registers(self):
@@ -1591,14 +1594,14 @@ class X86Cpu(Cpu):
 
         #TODO make symbol friendly
         if isinstance(divisor, (int, long)) and divisor == 0:
-            raise DivideError()
+            raise DivideByZeroError()
         quotient = Operators.UDIV(dividend, divisor)
 
         MASK = (1 << size) - 1
 
         #TODO make symbol friendly
         if isinstance(quotient, (int, long)) and quotient > MASK:
-            raise DivideError()
+            raise DivideByZeroError()
         remainder = Operators.UREM(dividend, divisor)
 
         cpu.write_register(reg_name_l, Operators.EXTRACT(quotient, 0, size))
@@ -1668,7 +1671,7 @@ class X86Cpu(Cpu):
 
         divisor = src.read()
         if isinstance(divisor, (int, long)) and divisor == 0:
-            raise DivideError()
+            raise DivideByZeroError()
 
         dst_size = src.size * 2
 
