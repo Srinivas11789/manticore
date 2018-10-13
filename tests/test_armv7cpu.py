@@ -3,7 +3,9 @@ import struct
 from functools import wraps
 
 from manticore.core.cpu.arm import Armv7Cpu as Cpu, Mask, Interruption
-from manticore.core.memory import Memory32
+from manticore.core.memory import Memory32, SMemory32
+from manticore.core.smtlib import *
+from manticore.core.state import Concretize
 
 from capstone.arm import *
 from capstone import CS_MODE_THUMB, CS_MODE_ARM
@@ -33,7 +35,8 @@ class Armv7CpuTest(unittest.TestCase):
     _multiprocess_can_split_ = True
 
     def setUp(self):
-        self.c = Cpu(Memory32())
+        cs = ConstraintSet()
+        self.c = Cpu(SMemory32(cs))
         self.rf = self.c.regfile
         self._setupStack()
 
@@ -63,19 +66,19 @@ class Armv7CpuTest(unittest.TestCase):
     def test_stack_push(self):
         self.c.stack_push(42)
         self.c.stack_push(44)
-        self.assertItemsEqual(self.c.read(self.c.STACK, 4), '\x2c\x00\x00\x00')
-        self.assertItemsEqual(self.c.read(self.c.STACK + 4, 4), '\x2a\x00\x00\x00')
+        self.assertEqual(b''.join(self.c.read(self.c.STACK, 4)), b'\x2c\x00\x00\x00')
+        self.assertEqual(b''.join(self.c.read(self.c.STACK + 4, 4)), b'\x2a\x00\x00\x00')
 
     def test_stack_pop(self):
         v = 0x55
         v_bytes = struct.pack('<I', v)
         self.c.stack_push(v)
         val = self.c.stack_pop()
-        self.assertItemsEqual(self.c.read(self.c.STACK - 4, 4), v_bytes)
+        self.assertEqual(b''.join(self.c.read(self.c.STACK - 4, 4)), v_bytes)
 
     def test_stack_peek(self):
         self.c.stack_push(42)
-        self.assertItemsEqual(self.c.stack_peek(), '\x2a\x00\x00\x00')
+        self.assertEqual(b''.join(self.c.stack_peek()), b'\x2a\x00\x00\x00')
 
     def test_readwrite_int(self):
         self.c.STACK -= 4
@@ -182,7 +185,8 @@ def itest_thumb_multiple(asms):
 
 class Armv7CpuInstructions(unittest.TestCase):
     def setUp(self):
-        self.cpu = Cpu(Memory32())
+        cs = ConstraintSet()
+        self.cpu = Cpu(SMemory32(cs))
         self.mem = self.cpu.memory
         self.rf = self.cpu.regfile
 
@@ -201,7 +205,7 @@ class Armv7CpuInstructions(unittest.TestCase):
             self.mem.write(start, assemble(asm, mode))
         self.rf.write('PC', start)
         self.rf.write('SP', self.stack + 0x1000)
-        self.cpu._set_mode(mode)
+        self.cpu.mode = mode
 
     def _checkFlagsNZCV(self, n, z, c, v):
         self.assertEqual(self.rf.read('APSR_N'), n)
@@ -445,6 +449,11 @@ class Armv7CpuInstructions(unittest.TestCase):
         self.rf.write('R2', 0x3)
         self.cpu.execute()
         self.assertEqual(self.rf.read('R3'), 0x60000000)
+
+    @itest_setregs("R3=0xfffffff6", "R4=10")
+    @itest_thumb("adcs r3, r4")
+    def test_thumb_adc_basic(self):
+        self.assertEqual(self.rf.read('R3'), 0)
 
     @itest_custom("adc r3, r1, r2")
     @itest_setregs("R1=1", "R2=2", "APSR_C=1")
@@ -704,6 +713,14 @@ class Armv7CpuInstructions(unittest.TestCase):
         self.cpu.stack_push(42)
         self.cpu.execute()
         self.assertEqual(self.rf.read('R1'), 42)
+        self.assertEqual(self.cpu.mode, CS_MODE_ARM)
+
+    @itest_custom("ldr pc, [sp]")
+    def test_ldr_imm_off_none_to_thumb(self):
+        self.cpu.stack_push(43)
+        self.cpu.execute()
+        self.assertEqual(self.rf.read('R15'), 42)
+        self.assertEqual(self.cpu.mode, CS_MODE_THUMB)
 
     @itest_custom("ldr r1, [sp, #4]")
     def test_ldr_imm_off_pos(self):
@@ -863,7 +880,7 @@ class Armv7CpuInstructions(unittest.TestCase):
     @itest_setregs("R1=3")
     def test_push_one_reg(self):
         self.cpu.execute()
-        self.assertItemsEqual(self.cpu.stack_peek(), struct.pack('<I', 3))
+        self.assertEqual(b''.join(self.cpu.stack_peek()), struct.pack('<I', 3))
 
     @itest_custom("push {r1, r2, r3}")
     @itest_setregs("R1=3", "R2=0x55", "R3=0xffffffff")
@@ -872,7 +889,7 @@ class Armv7CpuInstructions(unittest.TestCase):
         self.cpu.execute()
         sp = self.cpu.STACK
         self.assertEqual(self.rf.read('SP'), pre_sp - (3 * 4))
-        self.assertItemsEqual(self.cpu.stack_peek(), struct.pack('<I', 3))
+        self.assertEqual(b''.join(self.cpu.stack_peek()), struct.pack('<I', 3))
         self.assertEqual(self.cpu.read_int(sp + 4, self.cpu.address_bit_size), 0x55)
         self.assertEqual(self.cpu.read_int(sp + 8, self.cpu.address_bit_size), 0xffffffff)
 
@@ -1039,17 +1056,50 @@ class Armv7CpuInstructions(unittest.TestCase):
         self.cpu.execute()
         self.assertEqual(self.rf.read('R3'), 2)
 
+    @itest_setregs("R3=0xE")
+    @itest_thumb("sub r3, #12")
+    def test_thumb_sub_basic(self):
+        self.assertEqual(self.rf.read('R3'), 2)
+
     @itest_custom("sub r3, r1, #5")
     @itest_setregs("R1=10")
     def test_sub_imm(self):
         self.cpu.execute()
         self.assertEqual(self.rf.read('R3'), 5)
 
+    @itest_custom("uqsub8 r3, r1, r2")
+    @itest_setregs("R1=0x04030201", "R2=0x01010101")
+    def test_uqsub8_concrete(self):
+        self.cpu.execute()
+        self.assertEqual(self.rf.read('R3'), 0x03020100)
+
+    @itest_custom("uqsub8 r3, r1, r2")
+    @itest_setregs("R1=0x05040302", "R2=0x07050101")
+    def test_uqsub8_concrete_saturated(self):
+        self.cpu.execute()
+        self.assertEqual(self.rf.read('R3'), 0x00000201)
+
+    @itest_custom("uqsub8 r3, r1, r2")
+    @itest_setregs("R2=0x01010101")
+    def test_uqsub8_sym(self):
+        op1 = BitVecVariable(32, 'op1')
+        self.cpu.memory.constraints.add(op1 >= 0x04030201)
+        self.cpu.memory.constraints.add(op1 <  0x04030204)
+        self.cpu.R1 = op1
+        self.cpu.execute()
+        all_vals = solver.get_all_values(self.cpu.memory.constraints, self.cpu.R3)
+        self.assertIn(0x03020100, all_vals)
+
     @itest_custom("sbc r3, r1, #5")
     @itest_setregs("R1=10")
     def test_sbc_imm(self):
         self.cpu.execute()
         self.assertEqual(self.rf.read('R3'), 4)
+
+    @itest_setregs("R0=0","R3=0xffffffff")
+    @itest_thumb("sbcs r0, r3")
+    def test_sbc_thumb(self):
+        self.assertEqual(self.rf.read('R0'), 0)
 
     @itest_custom("ldm sp, {r1, r2, r3}")
     def test_ldm(self):
@@ -1130,6 +1180,11 @@ class Armv7CpuInstructions(unittest.TestCase):
         self.cpu.execute()
         self.assertEqual(self.rf.read('R2'), 0x1005)
 
+    @itest_setregs("R3=0x1000")
+    @itest_thumb("orr r3, #5")
+    def test_thumb_orr_imm(self):
+        self.assertEqual(self.rf.read('R3'), 0x1005)
+
     @itest_custom("orrs r2, r3")
     @itest_setregs("R2=0x5", "R3=0x80000000")
     def test_orrs_imm_flags(self):
@@ -1170,6 +1225,11 @@ class Armv7CpuInstructions(unittest.TestCase):
     def test_eor_imm(self):
         self.cpu.execute()
         self.assertEqual(self.rf.read('R2'), 0xF)
+
+    @itest_setregs("R3=0xA")
+    @itest_thumb("eor r3, #5")
+    def test_thumb_eor_imm(self):
+        self.assertEqual(self.rf.read('R3'), 0xF)
 
     @itest_custom("eors r2, r3")
     @itest_setregs("R2=0xAA", "R3=0x80000000")
@@ -1368,6 +1428,11 @@ class Armv7CpuInstructions(unittest.TestCase):
     def test_lsr_reg_imm(self):
         self.assertEqual(self.rf.read('R0'), 0x1000 >> 3)
 
+    @itest_setregs("R1=0", "R2=3")
+    @itest_thumb("lsrs r1, r2")
+    def test_thumb_lsrs(self):
+        self.assertEqual(self.cpu.R1, 0)
+
     @itest_setregs("R5=0", "R6=16")
     @itest_thumb("lsr.w R5, R6, #3")
     def test_lsrw_thumb(self):
@@ -1391,7 +1456,7 @@ class Armv7CpuInstructions(unittest.TestCase):
         self._checkFlagsNZCV(1, 0, 0, 0)
 
     def test_flag_state_continuity(self):
-        '''If an instruction only partially updates flags, cpu.setFlags should
+        '''If an instruction only partially updates flags, cpu.set_flags should
         ensure unupdated flags are preserved.
 
         For example:
@@ -1431,6 +1496,11 @@ class Armv7CpuInstructions(unittest.TestCase):
     @itest("BIC R2, R1, #0x10")
     def test_bic_reg_imm(self):
         self.assertEqual(self.rf.read('R2'), 0xEF)
+
+    @itest_setregs("R1=0xFF")
+    @itest("BIC R1, #0x10")
+    def test_thumb_bic_reg_imm(self):
+        self.assertEqual(self.rf.read('R1'), 0xEF)
 
     @itest_setregs("R1=0x1008")
     @itest("BLX R1")
@@ -1535,6 +1605,12 @@ class Armv7CpuInstructions(unittest.TestCase):
         self.assertEqual(self.cpu.R2, 0x55555555)
         self.assertEqual(self.cpu.R1, 0x55)
 
+    @itest_setregs("R1=0x45", "R2=0x55555555")
+    @itest("uxth r1, r2")
+    def test_uxth(self):
+        self.assertEqual(self.cpu.R2, 0x55555555)
+        self.assertEqual(self.cpu.R1, 0x5555)
+
     @itest_setregs("R1=1","R2=0","R3=0","R4=0","R12=0x4141")
     @itest_thumb_multiple(["cmp r1, #1", "itt ne", "mov r2, r12", "mov r3, r12", "mov r4, r12"])
     def test_itt_ne_noexec(self):
@@ -1582,3 +1658,40 @@ class Armv7CpuInstructions(unittest.TestCase):
         self.assertEqual(self.rf.read('R1'), 0x0708)
         self.assertEqual(self.rf.read('R3'), 0xFFFFF001)
         self.assertEqual(self.rf.read('R5'), 0xF0)
+
+    @itest_custom("blx  r1")
+    def test_blx_reg_sym(self):
+        dest = BitVecVariable(32, 'dest')
+        self.cpu.memory.constraints.add(dest >= 0x1000)
+        self.cpu.memory.constraints.add(dest <= 0x1001)
+        self.cpu.R1 = dest
+
+        # First, make sure we raise when the mode is symbolic and ambiguous
+        with self.assertRaises(Concretize) as cm:
+            self.cpu.execute()
+
+        # Then, make sure we have the correct expression
+        e = cm.exception
+        all_modes = solver.get_all_values(self.cpu.memory.constraints, e.expression)
+        self.assertIn(CS_MODE_THUMB, all_modes)
+        self.assertIn(CS_MODE_ARM, all_modes)
+
+        # Assuming we're in ARM mode, ensure the callback toggles correctly.
+        self.assertEqual(self.cpu.mode, CS_MODE_ARM)
+        # The setstate callback expects a State as its first argument; since we
+        # don't have a state, the unit test itself is an okay approximation, since
+        # the cpu lives in self.cpu
+        e.setstate(self, CS_MODE_THUMB)
+        self.assertEqual(self.cpu.mode, CS_MODE_THUMB)
+
+    @itest_setregs("R1=0x00000008") # pc/r15 is set to 0x1004 in _setupCpu()
+    @itest("add pc, pc, r1")
+    def test_add_to_pc(self):
+        self.assertEqual(self.rf.read('R15'), 0x1014)
+
+    # Make sure a cpu will survive a round trip through pickling/unpickling
+    def test_arm_save_restore_cpu(self):
+        import pickle
+        dumped_s = pickle.dumps(self.cpu)
+        self.cpu = pickle.loads(dumped_s)
+

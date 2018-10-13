@@ -1,13 +1,18 @@
-from manticore.seth import ManticoreEVM
+from manticore.ethereum import ManticoreEVM, evm, Operators
 ################ Script #######################
 
-seth = ManticoreEVM()
+m = ManticoreEVM()
+
 #And now make the contract account to analyze
 # cat  | solc --bin 
 source_code = '''
 pragma solidity ^0.4.13;
 contract NoDistpatcher {
     event Log(string);
+
+    function  named_func(uint x) returns (uint) {
+    return 5 + x;
+    }
 
     function() payable {
         if (msg.data[0] == 'A') {
@@ -20,31 +25,23 @@ contract NoDistpatcher {
 }
 '''
 
-print "[+] Creating a user account"
-user_account = seth.create_account(balance=1000)
+user_account = m.create_account(balance=1000, name='user_account')
+print("[+] Creating a user account", user_account.name)
 
+contract_account = m.solidity_create_contract(source_code, owner=user_account, name='contract_account')
+print("[+] Creating a contract account", contract_account.name)
+contract_account.named_func(1)
 
-print "[+] Creating a contract account"
-contract_account = seth.solidity_create_contract(source_code, owner=user_account)
-
-
-print "[+] Now the symbolic values"
-
-symbolic_data = seth.SByte(320) 
-symbolic_value = None 
-seth.transaction(caller=user_account,
-                address=contract_account,
+print("[+] Now the symbolic values")
+symbolic_data = m.make_symbolic_buffer(320) 
+symbolic_value = m.make_symbolic_value(name="VALUE")
+symbolic_address = m.make_symbolic_value(name="ADDRESS")
+symbolic_caller = m.make_symbolic_value(name="CALLER")
+m.transaction(caller=symbolic_caller,
+                address=symbolic_address,
                 data=symbolic_data,
                 value=symbolic_value )
 
-print "[+] There are %d reverted states now"% len(seth.final_state_ids)
-
-print "[+] There are %d alive states now"% len(seth.running_state_ids)
-for state_id in seth.running_state_ids:
-    print seth.report(state_id)
-
-print "[+] Global coverage:"
-print seth.coverage(contract_account)
-
-
-
+#Let seth know we are not sending more transactions 
+m.finalize()
+print("[+] Look for results in %s"% m.workspace)

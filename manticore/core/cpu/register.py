@@ -1,5 +1,6 @@
 from ..smtlib import Operators, BitVec, Bool
 
+
 class Register(object):
     '''
     Generic variable width register. For 1 bit registers, allows writes of types
@@ -21,7 +22,7 @@ class Register(object):
             self.value = val
         elif isinstance(val, BitVec):
             self.value = val.Bool() if self.is_flag() else val
-        elif isinstance(val, (int, long)):
+        elif isinstance(val, int):
             self.value = Operators.EXTRACT(val, 0, self.width)
             if self.is_flag():
                 self.value = bool(self.value)

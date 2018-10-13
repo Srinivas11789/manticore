@@ -1,5 +1,6 @@
 import unittest
 import struct
+import os
 from functools import wraps
 
 from manticore.core.cpu.arm import Armv7Cpu as Cpu, Mask, Interruption
@@ -741,7 +742,7 @@ class Armv7UnicornInstructions(unittest.TestCase):
     @itest_setregs("R1=3")
     def test_push_one_reg(self):
         emulate_next(self.cpu)
-        self.assertItemsEqual(self.cpu.stack_peek(), struct.pack('<I', 3))
+        self.assertCountEqual(b''.join(self.cpu.stack_peek()), struct.pack('<I', 3))
 
     @itest_custom("push {r1, r2, r3}")
     @itest_setregs("R1=3", "R2=0x55", "R3=0xffffffff")
@@ -750,7 +751,7 @@ class Armv7UnicornInstructions(unittest.TestCase):
         emulate_next(self.cpu)
         sp = self.cpu.STACK
         self.assertEqual(self.rf.read('SP'), pre_sp - (3 * 4))
-        self.assertItemsEqual(self.cpu.stack_peek(), struct.pack('<I', 3))
+        self.assertCountEqual(b''.join(self.cpu.stack_peek()), struct.pack('<I', 3))
         self.assertEqual(self.cpu.read_int(sp + 4, self.cpu.address_bit_size), 0x55)
         self.assertEqual(self.cpu.read_int(sp + 8, self.cpu.address_bit_size), 0xffffffff)
 
@@ -1212,7 +1213,7 @@ class Armv7UnicornInstructions(unittest.TestCase):
         self.assertEqual(self.rf.read('R2'), 2)
 
     def test_flag_state_continuity(self):
-        '''If an instruction only partially updates flags, cpu.setFlags should
+        '''If an instruction only partially updates flags, cpu.set_flags should
         ensure unupdated flags are preserved.
 
         For example:
@@ -1318,7 +1319,8 @@ class UnicornConcretization(unittest.TestCase):
     def get_state(cls):
         if cls.cpu is None:
             constraints = ConstraintSet()
-            platform = linux.SLinux('/bin/ls')
+            dirname = os.path.dirname(__file__)
+            platform = linux.SLinux(os.path.join(dirname, 'binaries', 'basic_linux_amd64'))
             cls.state = State(constraints, platform)
             cls.cpu = platform._mk_proc('armv7')
         return (cls.cpu, cls.state)
@@ -1328,6 +1330,8 @@ class UnicornConcretization(unittest.TestCase):
         self.cpu, self.state = self.__class__.get_state()
         self.mem = self.cpu.memory
         self.rf = self.cpu.regfile
+        for r in self.cpu.regfile.canonical_registers:
+            self.cpu.write_register(r, 0)
 
     def _setupCpu(self, asm):
         self.code = self.mem.mmap(0x1000, 0x1000, 'rwx')
@@ -1397,4 +1401,13 @@ class UnicornConcretization(unittest.TestCase):
 
         self.assertEqual(self.rf.read('PC'), self.code+8)
         self.assertEqual(self.rf.read('R0'), 0x12345678)
+
+
+    @itest_custom("mov r1, r2")
+    def test_concretize_register_isnt_consumed(self):
+        val = self.state.new_symbolic_value(32)
+        self.rf.write('R2', val)
+
+        with self.assertRaises(ConcretizeRegister):
+            self.cpu.emulate(self.cpu.decode_instruction(self.cpu.PC))
 

@@ -1,3 +1,4 @@
+from __future__ import print_function
 from manticore import Manticore
 from manticore.platforms import linux_syscalls
 
@@ -30,7 +31,7 @@ def dump_gdb(cpu, addr, count):
     for offset in range(addr, addr+count, 4):
         val = int(gdb.getM(offset)  & 0xffffffff)
         val2 = int(cpu.read_int(offset))
-        print '{:x}: g{:08x} m{:08x}'.format(offset, val, val2)
+        print('{:x}: g{:08x} m{:08x}'.format(offset, val, val2))
 
 def cmp_regs(cpu, should_print=False):
     '''
@@ -71,7 +72,7 @@ def post_mcore(state, last_instruction):
 
     # Synchronize qemu state to manticore's after a system call
     if last_instruction.mnemonic.lower() == 'svc':
-        # Syncronize all writes that have happened
+        # Synchronize all writes that have happened
         writes = state.cpu.memory.pop_record_writes()
         if writes:
             logger.debug("Got %d writes", len(writes))
@@ -139,7 +140,7 @@ def sync_svc(state):
             return
     except ValueError:
         for reg in state.cpu.canonical_registers:
-            print '{}: {:x}'.format(reg, state.cpu.read_register(reg))
+            print('{}: {:x}'.format(reg, state.cpu.read_register(reg)))
         raise
 
 def initialize(state):
@@ -227,7 +228,7 @@ if __name__ == "__main__":
     args = argv[1:]
 
     if len(args) == 0:
-        print "usage: python {} PROGRAM1 ...".format(argv[0])
+        print("usage: python {} PROGRAM1 ...".format(argv[0]))
         exit()
 
     verify(args)
