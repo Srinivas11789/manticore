@@ -970,7 +970,7 @@ class ManticoreSingle(ManticoreBase):
 
             def wait_for(self, condition, *args, **kwargs):
                 if not condition():
-                    raise Exception("Deadlock: Waiting for CTRL+C")
+                    raise ManticoreError("Deadlock: Waiting for CTRL+C")
 
         self._lock = FakeLock()
         self._killed = ctypes.c_bool(False)
